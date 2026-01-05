@@ -66,6 +66,11 @@
 #' @param soilC_steadyState flag for soilC at steady state calculations. if true the soilC at st st is calculated with the average litterfall of the simulations and soilC balance is computed for each year
 #' @param disturbanceON flag for activating disturbance modules. can be one of "wind", "fire",  "bb" or a combination of the three, ex. c("fire", "bb") 
 #' @param CO2model CO2 model for PRELES. Default CO2model = 1 (Launaniemi) ; CO2model = 2 (Kolari) 
+#' @param lightnings used in fire disturbance module. is the frequency of lightning-caused ignition events (ha-1 d-1) used in the fire module it is a matrix of dimensions nSites,ndays 
+#' @param popden used in fire disturbance module. It is the population density (individuals km-2). it is a matrix of dimensions nSites,ndays 
+#' @param a_nd used in fire disturbance module. a(ND) is a parameter expressing the propensity of people to produce ignition events (ignitions individual-1 d-1). site specific parameter. vector of lenght nSites
+#' @param NIout flag to return the nesterov index
+#' @param FDIout flag to return the fire danger index instead of SW daily preles, set to 1 to return the FDI
 #' 
 #' @importFrom plyr aaply
 #'
@@ -160,7 +165,12 @@ TransectRun <- function(SiteType = NA, initVar = NA, species = NA, nYears = 100,
                         TminTmax = NA,
                         soilC_steadyState=FALSE,
                         disturbanceON = NA,
-                        CO2model = 2
+                        CO2model = 2,
+                        lightnings = NA,
+                        popden = NA,
+                        a_nd = NA,
+                        NIout = F,
+                        FDIout = 0
 ) {
   
   if(!CO2model %in% 1:2) stop(paste0("set CO2model 1 or 2"))
@@ -179,8 +189,8 @@ TransectRun <- function(SiteType = NA, initVar = NA, species = NA, nYears = 100,
   if(!modVersion %in% c("multiSite","region")) stop("modVersion must be region or multiSite")
   
   nSites <- 7
-  siteInfo <- matrix(c(NA, NA, NA, 160, 0, 0, 20, 3, 3, 413, 0.45, 0.118), nSites, 12, byrow = T)
-  if (is.na(SiteType)) {
+  siteInfo <- matrix(c(NA, NA, NA, 160, 0, 0, 20, 3, 3, 413, 0.45, 0.118,3), nSites, 13, byrow = T)
+  if (all(is.na(SiteType))) {
     SiteType <- 3
     warning("siteType 3 was assigned to all sites since SiteType was not provided")
   }
@@ -306,7 +316,12 @@ TransectRun <- function(SiteType = NA, initVar = NA, species = NA, nYears = 100,
     SMIt0 = SMIt0,
     TminTmax = TminTmax,
     disturbanceON = disturbanceON,
-    CO2model=CO2model
+    CO2model=CO2model,
+    lightnings = lightnings,
+    popden = popden,
+    a_nd = a_nd,
+    NIout = NIout,
+    FDIout = FDIout
     )
 
   initPrebas$multiInitVar[, 2, ] <- initialAgeSeedl(initPrebas$siteInfo[, 3], rowMeans(initPrebas$ETS)) # Initial age

@@ -9,7 +9,7 @@
    if(SMIt0 < -998.d0) SMIt0 = SMI !!if year 1 SMIt0 is the same of first year  
   endif
   call spruceVars(outt((/4,7,13/),:,1),nLayers,(/2,10/),2,spruceStandVars,rBAspruce)
-  call riskBB(pBB,TsumSBBs,spruceStandVars(1),spruceStandVars(3),spruceStandVars(2),(SMI+SMIt0)/2.)
+  call riskBB(pBB,TsumSBBs,spruceStandVars(1),spruceStandVars(3),spruceStandVars(2),(SMI+SMIt0)/2.,outt(3,1,1))
   !update output
   !modOut((year+1),45,:,2) = 0.
   !modOut((year+1),45,1,2) = pBB(1)
@@ -38,7 +38,7 @@ if(disturbance_bb) then !!!!mortality caused by bark beetle is switched off for 
    outt(43,:,2)=BAdist! BAdist = intenSpruce * rBAspruce * STAND_all(13,:)
 
 !!!! management reaction flags are updated (start)
- vdam = sum(outt(43,:,2)/outt(13,:,1) * outt(30,:,1)) !calculate roughly the damaged volume based on BAdamaged and tot ba ratio
+ vdam = sum(outt(43,:,2))/sum(outt(13,:,1)) * sum(outt(30,:,1)) !calculate roughly the damaged volume based on BAdamaged and tot ba ratio
  pHarvTrees = 0.
 
 

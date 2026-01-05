@@ -27,7 +27,7 @@ implicit none
  integer, intent(in) :: DOY(365)!, ECMmod, etmodel fvec
  real (kind=8), intent(inout) :: pPRELES(30), tapioPars(5,2,3,20), thdPer, limPer ! tapioPars(sitetype, conif/decid, south/center/north, thinning parameters), and parameters for modifying thinnig limits and thresholds
  real (kind=8), intent(inout) :: LUEtrees(nSp),LUEgv,latitude, TsumSBBs(4)!TsumSBB = temp sums bark beetle (1)= previous two years,(2)= previous year, (1)= current year
- real (kind=8), intent(inout) :: tTapio(5,3,2,7), ftTapio(5,3,3,7) ! Tending and first thinning parameter.
+ real (kind=8), intent(inout) :: tTapio(5,nSp,2,7), ftTapio(5,nSp,3,7) ! Tending and first thinning parameter.
  real (kind=8), intent(inout) :: thinning(nThinning, 11) ! User defined thinnings, BA, height of remaining trees, year, etc. Both Tapio rules and user defined can act at the same time. Documented in R interface
  real (kind=8), intent(inout) :: initClearcut(5) !initial stand conditions after clear cut: (H, D, totBA, Hc, Ainit). If not given, defaults are applied. Ainit is the year new stand appears.
  real (kind=8), intent(inout) :: pCrobas(npar, nSp), pAWEN(12, nSp),mortMod,pECMmod(12)
@@ -71,7 +71,7 @@ REAL (kind=8):: BAdist(nLayers) !disturbed BA per layer
  real (kind=8), intent(inout) :: fAPAR(nYears), GVout(nYears, 5) ! GVout contains: fAPAR_gv, litGV, photoGV, Wgv,GVnpp !!! ground vegetation
  real (kind=8), intent(inout) :: dailyPRELES((nYears*365), 3) ! GPP, ET, SW
  real (kind=8), intent(inout) :: initVar(7, nLayers), P0y(nYears,2), ETSy(nYears), initCLcutRatio(nLayers) ! initCLcutRatio sets the initial layer compositions after clearcut.
- real (kind=8), intent(inout) :: siteInfo(10)
+ real (kind=8), intent(inout) :: siteInfo(11)
  real (kind=8), intent(inout) :: output(nYears, nVar, nLayers, 2), energyWood(nYears, nLayers, 2) ! last dimension: 1 is for stand and 2 is for harvested sum of wood.
  real (kind=8), intent(inout) :: soilCinOut(nYears, 5, 3, nLayers), soilCtotInOut(nYears) ! dimensions: nyears, AWENH, woody/fineWoody/foliage, layers
  real (kind=8), intent(inout) :: pYasso(35), weatherYasso(nYears,3), litterSize(3, nSp) ! litterSize dimensions: treeOrgans, species
@@ -142,19 +142,19 @@ real (kind=8) :: Nmort, BAmort, VmortDist(nLayers),deltaSiteTypeFert=1.
 !v1 version definitions
  real (kind=8) :: theta,Tdb=10.,f1,f2, Gf, Gr,mort
  real (kind=8) :: ETSmean, BAtapio(2), tapioOut(3)
- logical :: doThin, early = .false., flagInitWithThin = .false.
+ logical :: doThin = .false., early = .false., flagInitWithThin = .false.
  real (kind=8) :: Hdom,thinClx(nYears,2),pDomRem, randX
  !!user thinnings
 real (kind=8) :: pHarvTrees, hW_branch, hW_croot, hW_stem, hWdb
 real (kind=8) :: remhW_branch, remhW_croot,remhW_stem,remhWdb
 
-integer :: CO2model, AinitFix,etmodel, gvRun, fertThin, ECMmod, oldLayer !not direct inputs anymore, but in prebasFlags fvec
-integer, intent(inout) :: prebasFlags(9)
+integer :: FDIout,CO2model, AinitFix,etmodel, gvRun, fertThin, ECMmod, oldLayer !not direct inputs anymore, but in prebasFlags fvec
+integer, intent(inout) :: prebasFlags(10)
 real (kind=8) :: dailySW(365)
 
 !fire disturbances
 real (kind=8) :: Cpool_litter_wood,Cpool_litter_green,livegrass,soil_moisture(365)
-real (kind=8) :: Tmin(365),Tmax(365),FDI(365), NI((nYears*365)),n_fire_year!
+real (kind=8) :: Tmin(365),Tmax(365),FDI(365), NI((nYears*365)),n_fire_year,lightnings(nYears*365),popden(nYears*365),a_nd
 !BB disturbances
 real (kind=8) :: rBAspruce(nLAyers), spruceStandVars(3),pBB(5), SMI, SMIt0, intenSpruce, SHI !SMIt0 = SMI previous year
 
@@ -166,6 +166,7 @@ oldLayer = int(prebasFlags(4))
 ECMmod = int(prebasFlags(5))
 CO2model = int(prebasFlags(7))
 AinitFix = int(prebasFlags(8))
+FDIout = int(prebasFlags(10))
 
 !!set disturbance flags
 ! set all dist to 0 and then choose based on flag
@@ -204,10 +205,16 @@ endif
   ! open(2,file="test2.txt")
 
 !###initialize model###!
+popden(:) = dailyPRELES(:,1) !read population density and reset to 0 the dailyPreles output
+dailyPRELES(:,1) = 0.0
+lightnings(:) = dailyPRELES(:,2) !read daily lightnings and reset to 0 the dailyPreles output
+dailyPRELES(:,2) = 0.0
 NI(:) = dailyPRELES(:,3) !read nestorov index and reset to -999 the dailyPreles output
 dailyPRELES(:,3) = -999.0
+a_nd = output(1,47,1,2)
 SMIt0 = output(1,46,1,2) !initialize SMI previous year
 output(1,46,1,2) = 0.d0
+output(1,47,1,2) = 0.d0
 lastGVout = 0.
 thinClx = 0.
 energyWood = 0.
@@ -221,6 +228,7 @@ soilC = 0.
 countThinning = 1
 pars = pPRELES
 pars(1:3) = siteInfo(8:10)
+pars(4) = siteInfo(11) !tauDreinage
 soilC(1,:,:,:) = soilCinout(1,:,:,:)
 pars(24) = siteInfo(4)!SWinit
 pars(25) = siteInfo(5)!CWinit
@@ -242,8 +250,8 @@ ETSmean = sum(ETSy)/nYears
  ! modOut(1,17,:,1) = modOut(1,13,:,1)/(pi*((modOut(1,12,:,1)/2/100)**2))
  ! modOut(1,35,:,1) =  modOut(1,13,:,1)/modOut(1,17,:,1)
  !init siteType
- modOut(1,3,:,:) = output(1,3,:,:) ! assign site type and alfar
- modOut(2:nYears,3,:,:) = output(:,3,:,:) ! assign site type and alfar
+ modOut((nYears+1),3,:,:) = output(nYears,3,:,:) ! assign site type and alfar
+ modOut(1:nYears,3,:,:) = output(:,3,:,:) ! assign site type and alfar
  soilCtot(1) = sum(soilC(1,:,:,:)) !assign initial soilC
  modOut(:,45,:,1) = 0. !set heterotrophic respiration to 0
  do i = 1,nLayers
@@ -914,6 +922,10 @@ if (N>0.) then
 
         !Height growth-----------------------
     f1 = nppCost*10000 - (wf_STKG/par_vf) - (W_froot/par_vr) - (theta * W_wsap)
+	if(f1 < 0) then
+      theta = 0.
+      f1 = nppCost*10000 - (wf_STKG/par_vf) - (W_froot/par_vr)
+    endif
     f2 = (par_z* (wf_STKG + W_froot + W_wsap)* (1-gammaC) + par_z * gammaC * (W_c + &
         par_zb *W_bs + beta0 * W_c) + betaC * W_s)
     dH = max(0.,((H-Hc) * f1/f2))
@@ -1063,10 +1075,14 @@ endif
   If (countThinning <= nThinning .and. time==inttimes) Then
    If (year == int(thinning(countThinning,1)) .and. ij == int(thinning(countThinning,3))) Then! .and. siteNo == thinning(countThinning,2)) Then
 
-
 !set species from thinning matrix (strart)
    species = int(thinning(countThinning,2))
    stand(4) = thinning(countThinning,2)
+   D = STAND(12)
+   H = STAND(11)
+   BA = STAND(13)
+   hc = STAND(14)
+   
      !!!check if ingrowth and calculate dominant species
    if(D==0.d0 .and. H==0.d0 .and. thinning(countThinning,6)==-777.d0) then
     domSp = maxloc(STAND_all(13,:))
@@ -1077,10 +1093,8 @@ endif
 	
     modOut(:,3,ij,2) = pCrobas(int(20 + stand(3)),species)
 	prebasFlags(9) = ij
-	
    endif
 !set species from thinning matrix (end)
-
 
   ! if(year >= yearX) then
     STAND_tot = STAND
@@ -1134,7 +1148,7 @@ endif
 
      !!!check if ingrowth and calculate the number of trees
      if(D==0.d0 .and. H==0.d0 .and. thinning(countThinning,6)==-777.d0) then
-      BA = pi*((0.5d0/200.d0)**2.d0)*min((500.d0/minFapar),4000.d0)
+      BA = pi*((0.5d0/200.d0)**2.d0)*min((500.d0/minFapar),2000.d0)
      else
       BA = thinning(countThinning,6)
      endif
@@ -1142,8 +1156,8 @@ endif
      if (thinning(countThinning,4) /= -999.) H = thinning(countThinning,4)
      if (thinning(countThinning,7) /= -999.) stand(14) = thinning(countThinning,7)
      if (thinning(countThinning,5) /= -999.) D = thinning(countThinning,5)
-     Hc=stand(14)
-     Lc = H - Hc !Lc
+	 Hc=stand(14)
+	 Lc = H - Hc !Lc
      rc = Lc / (H-1.3) !crown ratio
      Nold = N
      wf_STKG_old = wf_STKG
@@ -1156,7 +1170,8 @@ endif
      else
        A = stand(16) * B/stand(35)
      endif
-     ! Update dependent variables
+	 
+	 ! Update dependent variables
      hb = par_betab * Lc**par_x
      gammaC = par_cR/stand(36)
      par_rhof = par_rhof1 * ETS + par_rhof2
@@ -1178,7 +1193,6 @@ endif
       yearX = 0.
      endif
      !!!reinitialize Nold and some variables when the thinning matrix is used to initialize the stand (end)
-
       if(isnan(stand(50))) stand(50) = 0
       if(isnan(stand(53))) stand(53) = 0
       if(isnan(stand(54))) stand(54) = 0
@@ -1237,7 +1251,6 @@ endif
   S_branch = S_branch + remhW_branch + remhW_croot * 0.83 + remhWdb
   S_wood = S_wood + remhW_croot*0.17 + remhW_stem
   endif
-
 
      outt(11,ij,2) = STAND_tot(11)
      outt(12,ij,2) = STAND_tot(12)
@@ -1314,6 +1327,7 @@ if (ClCut > 0.5 .or. outdist(max(INT(year-1),1), 9) == 1.) then !outdist(,9): cc
   A_clearcut = clct_pars(species,2)
   H_clearcut = clct_pars(species,3)
   D = stand_all(12,layer)
+  H = stand_all(11,layer)
   age = stand_all(7,layer)
   if ((D > D_clearcut) .or. (H > H_clearcut) .or. (age > A_clearcut) &
 		.or. outdist(max(INT(year-1),1), 9) == 1.) then !outdist(,9): cc-inducing wind dist in previous year
@@ -1449,7 +1463,7 @@ endif
 
 !!!!test for thinnings!!!!
  !!!!!!!for coniferous dominated stands!!!!!!
-if(defaultThin == 1.) then
+if(defaultThin > 0.) then
   if(oldLayer==1) then
    ll=max((nLayers-1),1)
   else
@@ -1469,7 +1483,8 @@ if(defaultThin == 1.) then
  Hdom = pCrobas(42,species)*exp(-1/max((H-1.3),0.001))+pCrobas(43,species)*H
  Ntot = sum(STAND_all(17,:))
   !! here we decide what thinning function to use; 3 = tapioThin, 2 = tapioFirstThin, 1 = tapioTend
- call chooseThin(species, siteType, ETSmean, Ntot, Hdom, tTapio, ftTapio, thinningType)
+if(defaultThin == 1.) then
+ call chooseThin(species, siteType, ETSmean, Ntot, Hdom, tTapio, ftTapio, thinningType,nSp)
  ! thinx = thinningType
 
  if(thinningType == 3.) then
@@ -1482,7 +1497,7 @@ if(defaultThin == 1.) then
     doThin = .false.
   endif
  else if(thinningType == 2.) then
-  call tapioFirstThin(pCrobas(28,species),siteType,ETSmean,ftTapio,limPer,thdPer,early,tapioOut)
+  call tapioFirstThin(pCrobas(28,species),siteType,ETSmean,ftTapio,limPer,thdPer,early,tapioOut,nSp)
   Hdom_lim = tapioOut(1) ! Hdom limit to start thinning
   dens_lim = tapioOut(2) ! density limit to start thinning; both need to be reached
   dens_thd = tapioOut(3) ! density after thinning
@@ -1492,7 +1507,7 @@ if(defaultThin == 1.) then
     doThin = .false.
   endif
  else if(thinningType == 1.) then
-  call tapioTend(pCrobas(28,species),siteType,ETSmean,tTapio,limPer,thdPer,tapioOut)
+  call tapioTend(pCrobas(28,species),siteType,ETSmean,tTapio,limPer,thdPer,tapioOut,nSp)
   Hdom_lim = tapioOut(1)! Hdom limit to start thinning
   dens_lim = tapioOut(2) ! density limit to start thinning; both need to be reached
   dens_thd = tapioOut(3) ! density after thinning
@@ -1502,11 +1517,16 @@ if(defaultThin == 1.) then
     doThin = .false.
   endif
  endif
+endif
 
-
+if(defaultThin > 1.) then
+ call alternative_chooseThin(int(defaultThin),H, stand_all(7,layer),BA_tot, Ntot, tTapio, &
+				ftTapio, thinningType,BA_thd,dens_thd,doThin,nSp)
+endif
 
  if(doThin) then
-
+   
+   doThin = .false. !reset to false
    siteInfoDist(2) = 0 !reset counter for time since thinning (wind dist model predictor)
 
  !!!fertilization at thinning
@@ -1606,8 +1626,6 @@ if(defaultThin == 1.) then
   stand_all(13,ij) = BA
     Nthd = max(0.,(Nold - N))
     Hc = min(stand_all(14,ij),0.9*H)
-  if(siteInfo(1)==719400.) then
-  endif
 
   Wdb = stand_all(51,ij)
     Lc = H - Hc !Lc
@@ -1801,9 +1819,10 @@ modOut((year+1),9:nVar,:,:) = outt(9:nVar,:,:)
   FDI(:) = 0.
   call fireDist(Cpool_litter_wood,Cpool_litter_green,livegrass,soil_moisture, &
 	weatherPRELES(year,:,2),NI((1+((year-1)*365)):(365*year)),weatherPRELES(year,:,4),&
- FDI,n_fire_year)
+	FDI,n_fire_year,latitude,lightnings,popden,a_nd)
   modOut((year+1),47,:,2) = 0.
   modOut((year+1),47,1,2) = n_fire_year !maxval(FDI)
+  if(FDIout==1) dailyPRELES((1+((year-1)*365)):(365*year),3) = FDI
  ! endif
 
 enddo !end year loop

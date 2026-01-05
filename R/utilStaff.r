@@ -1,3 +1,148 @@
+###function to select subset sites in a initPrebas object.
+###useful to test the model locally . you can select few sites and reinitilize the model just for those sites to get lighter computational load
+#' Title
+#'
+#' @param initPrebas multisite Initialization object
+#' @param sitex sites to be selected
+#'
+#' @returns a multisite prebas initialization object with just the sitex sites
+#' @export
+#'
+#' @examples
+initPrebas_subsetter <- function(initPrebas,sitex){
+  notsubset <- c("nSites", "nClimID", "maxYears",
+                 "maxThin","pCROBAS", "allSp","maxNlayers",
+                 "ETSy", "P0y", "weather", "DOY", "pPRELES", "etmodel", 
+                 "pYASSO",  "pAWEN",   "weatherYasso",
+                 "litterSize","smoothP0","smoothETS", "tapioPars", 
+                 "ftTapioPar","tTapioPar", "GVrun",
+                 "mortMod", "ECMmod",  "pECMmod",
+                 "layerPRELES", "LUEtrees","LUEgv",  
+                 "alpharNcalc", "siteInfoDist", 
+                 "dist_flag", "CO2model" )
+  
+  # Subset all elements except 'notX'
+  subset_initPrebas <- lapply(names(initPrebas), function(name) {
+    x <- initPrebas[[name]]
+    if (!name %in% notsubset) {
+      if (is.vector(x)) {
+        x = x[sitex]
+      } else if (length(dim(x))==2) {
+        x = x[sitex,, drop = FALSE]
+      } else if (length(dim(x))==3) {
+        x = x[sitex,,, drop = FALSE]
+      } else if (length(dim(x))==4) {
+        x = x[sitex,,,, drop = FALSE]
+      } else if (length(dim(x))==5) {
+        x = x[sitex,,,,, drop = FALSE]
+      }
+    }
+    return(x)
+  })
+  
+  # Preserve names
+  names(subset_initPrebas) <- names(initPrebas)
+  
+  subset_initPrebas$nSites <- dim(subset_initPrebas$multiOut)[1]
+  # process weather inputs
+  subset_initPrebas$nClimID <- length(unique(subset_initPrebas$siteInfo[,2]))
+  climIDsunique <- sort(unique(subset_initPrebas$siteInfo[,2]))
+  if(length(climIDsunique)==1){
+    subset_initPrebas$siteInfo[,2] <- match(subset_initPrebas$siteInfo[,2], climIDsunique)
+    subset_initPrebas$siteInfo[2,2] <- 2
+    climIDsunique <- c(climIDsunique,climIDsunique)
+    subset_initPrebas$ETSy <- subset_initPrebas$ETSy[climIDsunique,]
+    subset_initPrebas$P0y <- subset_initPrebas$P0y[climIDsunique,,]
+    subset_initPrebas$weather <- subset_initPrebas$weather[climIDsunique,,,]
+    subset_initPrebas$weatherYasso <- subset_initPrebas$weatherYasso[climIDsunique,,]
+  }else{
+    subset_initPrebas$siteInfo[,2] <- match(subset_initPrebas$siteInfo[,2], climIDsunique)
+    subset_initPrebas$ETSy <- subset_initPrebas$ETSy[climIDsunique,]
+    subset_initPrebas$P0y <- subset_initPrebas$P0y[climIDsunique,,]
+    subset_initPrebas$weather <- subset_initPrebas$weather[climIDsunique,,,]
+    subset_initPrebas$weatherYasso <- subset_initPrebas$weatherYasso[climIDsunique,,]
+  }
+  
+  subset_initPrebas$maxYears <- max(subset_initPrebas$nYears)
+  subset_initPrebas$maxThin <- max(subset_initPrebas$nThinning)
+  subset_initPrebas$thinning <- subset_initPrebas$thinning[,1:subset_initPrebas$maxThin,]
+  subset_initPrebas$maxNlayers <- max(subset_initPrebas$nLayers)
+  return(subset_initPrebas)
+}
+
+
+###regression model for the drained peatland forested sites (paper reference)
+peat_regression_model <- function(BA,Tseason,siteType,peat_reg_pars=peat_regression_pars,maxsiteType = 5){
+  siteType <- min(siteType,maxsiteType)
+  p_st <- peat_reg_pars$p_st[siteType]
+  p_ba <- peat_reg_pars$p_ba
+  p_Tseason <- peat_reg_pars$p_Tseason
+  rh <- p_st + p_ba * BA + p_Tseason * Tseason
+  return(rh)
+}
+
+###multisite version of regression model for the drained peatland forested sites (paper reference)
+peat_regression_model_multiSite <- function(modOut,peat_sites,peat_regr_pars=peat_regression_pars,max_siteType = 5){
+  
+  peat_sites <- sort(peat_sites)
+  
+  siteTypes <- modOut$siteInfo[peat_sites,3] 
+  if(modOut$maxNlayers==1){
+    BA <- modOut$multiOut[peat_sites,,13,1,1]
+  }else{
+    BA <- apply(modOut$multiOut[peat_sites,,13,,1],1:2,sum)
+  }
+  
+  Tseason <- apply(modOut$weather[modOut$siteInfo[peat_sites,"climID"],,121:304,2],1:2,mean)
+  
+  Rh_peat <- peat_regression_model(BA,Tseason,siteTypes,peat_regr_pars,max_siteType) * 12/44 #converts CO2 equivalents to gC m-2-y
+  Rh_mineral <- apply(modOut$multiOut[peat_sites,,45,,1],1:2,sum)
+  NEP_mineral <- apply(modOut$multiOut[peat_sites,,46,,1],1:2,sum)
+  
+  Rh_net <- Rh_peat - Rh_mineral
+  NEP_peat <- NEP_mineral - Rh_net
+  
+  ####repleace values
+  modOut$multiOut[peat_sites,,45,,1] <- 0
+  modOut$multiOut[peat_sites,,46,,1] <- 0
+  modOut$multiOut[peat_sites,,45,1,1] <- Rh_peat
+  modOut$multiOut[peat_sites,,46,1,1] <- NEP_peat
+  
+  return(modOut)
+}
+
+
+# Derive HC from foliage mass this function is useful for databases like MS-NFI
+fHc_fol <- function(D,B,H, pCROB){
+  
+  # B basal area (m2)
+  # D diameter (cm)
+  # H height (m)
+  
+  VHc <- c()
+  
+  for(specid in 1:3){
+    
+    if(specid == 1){Wf <- 792.307 + 47.304 * B} # Pine
+    if(specid == 2) {Wf <- 15000 * (B / (B + 40))} # Spruce
+    if(specid == 3){Wf <- 0.5 *(792.307 + 47.304 * B)} # Birch
+    
+    
+    z <- pCROB[11,specid]
+    ksi <- pCROB[38,specid]
+    N <- B/(pi/4*(D/100)^2) # Number of trees
+    
+    wf <- Wf/N
+    L <- (wf/ksi)^(1/z)
+    VHc[specid] <- max(0.2,H-L) # Hc height to crown base
+    
+  }
+  return(VHc)
+}
+
+
+
+
 #' Initial age of the seedlings
 #'
 #' @param SiteType Site type

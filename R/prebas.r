@@ -8,7 +8,7 @@
 #' @param pYASSO A vector of YASSO parameters. Default is global pYAS
 #' @param pAWEN (12 x nSpecies(11) matrix) Matrix of parameter sets for litterfal decomposition in YASSO pools. Default is parsAWEN
 #' @param etmodel Evapotranspiration model for PRELES. Default etmodel = 0. Possible values -1, 0, 1, 2
-#' @param siteInfo vector of site info SiteID, climID, siteType, SWinit (initial soil water), CWinit (initial crown water), SOGinit (initial snow on ground), Sinit (initial temperature acclimation state), soildepth, effective field capacity, permanent wilthing point. Default = c(1,1,3,160,0,0,20,413.,0.45,0.118), i.e. siteType = 3. 
+#' @param siteInfo vector of site info SiteID, climID, siteType, SWinit (initial soil water), CWinit (initial crown water), SOGinit (initial snow on ground), Sinit (initial temperature acclimation state), soildepth, effective field capacity, permanent wilthing point, tauDrenage (Drainage delay used in PRELES). Default = c(1,1,3,160,0,0,20,413.,0.45,0.118,3), i.e. siteType = 3. 
 #' @param thinning A matrix with thinnig inputs. Rows correspond to a thinning event. Column 1 year from the start of the simulation; column 2 is siteID; column 3 layer where thinnings are carried out; column 4 to 7 stand variables (H, D, B, Hc); column 8 parameter that indicates if the stand variables (column 4:7) are provided as fraction of the actual model outputs (value=1 means that fraction is used); column 9 is the stand density after thinning if its value is not -999; colum 10 is Sapwood area of average tree at crown base (m2) if its value is not -999 (see examples).
 #' @param initClearcut A numeric vector with initial stand variables after clearcut: H, D, BA, Hc, Ainit. Ainit is the year when the stand reaches measurable size. If NA the default values from initSeedling.def are used Ainit and is automatically computed using air temperature.
 #' @param fixBAinitClarcut If 1, when clearcuts occur the species initial biomass is fixed at replanting using the values in initCLcutRatio else at replanting the replanting follows species relative basal area at last year 
@@ -55,14 +55,22 @@
 #' @param TcurrClim # average annual temperature of the site at current climate. if NA the first five years of the simulations will be used to calculate it.
 #' @param PcurrClim # average annual precipitation of the site at current climate. if NA the first five years of the simulations will be used to calculate it.
 #' @param HcModV flag for the Hc model: 1 use the pipe model defined in the HcPipeMod function, different from 1 uses empirical models; default value (HcModV_def) is 1
-#' @param prebasFlags vector of flags to reduce number of
 #' @param latitude latitude of the site
 #' @param TsumSBBs initial temperature sums for bark beetle risk for the two years before the first year if not available it will be calculated using the first year
 #' @param SMIt0 site vector of initial SoilMoirture index
 #' @param TminTmax matrix(climaIDs,2) with daily Tmin Tmax values for each climID, Tmin and Tmax will be used to calculate the Nesterov Index that will be used in the fire risk calculations  
 #' @param disturbanceON flag for activating disturbance modules. can be one of "wind", "fire",  "bb" or a combination of the three, ex. c("fire", "bb") 
 #' @param CO2model CO2 model for PRELES. Default CO2model = 1 (Launaniemi) ; CO2model = 2 (Kolari) 
-#'
+#' @param fixAinit 
+#' @param inHclct 
+#' @param siteInfoDist 
+#' @param yearFert 
+#' @param deltaSiteTypeFert 
+#' @param lightnings used in fire disturbance module. is the frequency of lightning-caused ignition events (ha-1 d-1) used in the fire module it should be a vector of length ndays of simulations
+#' @param popden used in fire disturbance module. It is the population density (individuals km-2). it is a vector of length nYearsnDays
+#' @param a_nd used in fire disturbance module. a(ND) is a parameter expressing the propensity of people to produce ignition events (ignitions individual-1 d-1). site specific parameter
+#' @param NIout flag to return the nesterov index
+#' 
 #' @return
 #'  soilC Initial soil carbon compartments for each layer. Array with dimentions = c(nYears,5,3,nLayers). The second dimention (5) corresponds to the AWENH pools; the third dimention (3) corresponds to the tree organs (foliage, branch and stem). \cr
 #'   \cr
@@ -176,8 +184,8 @@ prebas <- function(nYears,
                    tapioPars=pTapio,
                    thdPer=0.5,
                    limPer=0.5,
-                   ftTapioPar = ftTapio,
-                   tTapioPar = tTapio,
+                   ftTapioPar = NA,
+                   tTapioPar = NA,
                    GVrun = 1, ###flag for Ground vegetation model 1-> runs the GV model
                    thinInt=-999.,
                    fertThin=0.,
@@ -202,7 +210,11 @@ prebas <- function(nYears,
                    SMIt0 = NA,
                    TminTmax = NA,
                    disturbanceON = NA,
-                   CO2model = 2 #default from kaliokoski (2018)
+                   CO2model = 2, #default from kaliokoski (2018),
+                   lightnings = NA,
+                   popden = NA,
+                   a_nd = NA,
+                   NIout = F
               ){
   
   if(nrow(pCROBAS)!=53) stop("check that pCROBAS has 53 parameters, see pCROB to compare")
@@ -211,6 +223,9 @@ prebas <- function(nYears,
     pPRELES <- pPREL
     pPRELES[12:13] <- pCO2model[CO2model,]
   }
+  
+  if(all(is.na(tTapioPar))) tTapioPar <- tTapio[,1:ncol(pCROBAS),,]
+  if(all(is.na(ftTapioPar))) ftTapioPar <- ftTapio[,1:ncol(pCROBAS),,]
   
   #process disturbance flags
   if(all(unique(disturbanceON) %in% c("fire","wind","bb",NA))){
@@ -248,6 +263,9 @@ prebas <- function(nYears,
   }else{
     NI <- NesterovInd(rain = Precip,tmin = TminTmax[,1],tmax = TminTmax[,2]) 
   }
+  if(all(is.na(lightnings))) lightnings <- rep(0,length(PAR))
+  if(all(is.na(popden))) lightnings <- rep(0,length(PAR))
+  if(is.na(a_nd)) a_nd <- 0
   
   ####initialize disturbance module if exists
   if(is.na(siteInfoDist)){
@@ -295,7 +313,7 @@ prebas <- function(nYears,
       nLayers <- ifelse(is.null(ncol(initVar)),1,ncol(initVar))
     }
   nSp = ncol(pCROBAS)
-  if(anyNA(siteInfo)) siteInfo = c(1,1,3,160,0,0,20,413.,0.45,0.118) ###default values for nspecies and site type = 3
+  if(anyNA(siteInfo)) siteInfo = c(1,1,3,160,0,0,20,413.,0.45,0.118,3) ###default values for nspecies and site type = 3
                                   
   if(all(is.na(initCLcutRatio))){
     initCLcutRatio <- rep(1/nLayers,nLayers)
@@ -344,7 +362,7 @@ prebas <- function(nYears,
   if(any(is.na(inHclct))) inHclct[which(is.na(inHclct))] <- 999.99
   if(length(inHclct)==1) inHclct<- rep(inHclct,nSp)
   
-  clct_pars <- rbind(inDclct,inAclct,inHclct)
+  clct_pars <- cbind(inDclct,inAclct,inHclct)
   
   ###if any initial value is given the model is initialized from plantation
   if (all(is.na(initVar))){
@@ -495,10 +513,13 @@ prebas <- function(nYears,
   } 
   
   dailyPRELES = matrix(-999,(nYears*365),3) #### build daily output array for PRELES
+  dailyPRELES[,1] <- popden[1:(nYears*365)] ###fill preles daily output with nestorov index that will be used internalkly in prebas for fire risk calculations
+  dailyPRELES[,2] <- lightnings[1:(nYears*365)] ###fill preles daily output with  that will be used internalkly in prebas for fire risk calculations
   dailyPRELES[,3] <- NI[1:(nYears*365)] ###fill preles daily output with nestorov index that will be used internalkly in prebas for fire risk calculations
   
   output[1,46,1,2] <- SMIt0 #initialize SMI first year
-
+  output[1,47,1,2] <- a_nd #initialize a_nd first year
+  
   prebas <- .Fortran("prebas",
                      nYears=as.integer(nYears),
                      nLayers=as.integer(nLayers),
@@ -558,6 +579,7 @@ prebas <- function(nYears,
                      latitude = as.double(latitude),
                      TsumSBBs = as.double(TsumSBBs)
                      )
+  if(NIout) prebas$NI <- NI
   class(prebas) <- "prebas"
   return(prebas)
 }

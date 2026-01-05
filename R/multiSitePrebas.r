@@ -7,7 +7,7 @@
 #' @param etmodel 
 #' @param pYASSO 
 #' @param pAWEN 
-#' @param siteInfo 
+#' @param siteInfo matrix of (nsites,vars) columns are SiteID, climID, siteType, SWinit (initial soil water), CWinit (initial crown water), SOGinit (initial snow on ground), Sinit (initial temperature acclimation state), soildepth, effective field capacity, permanent wilthing point, tauDrenage (Drainage delay used in PRELES). Default = c(1,1,3,160,0,0,20,413.,0.45,0.118,3), i.e. siteType = 3. 
 #' @param multiInitVar 
 #' @param multiThin 
 #' @param multiNthin 
@@ -59,7 +59,12 @@
 #' @param TminTmax array(climaIDs,ndays,2) with daily Tmin Tmax values for each climID, Tmin and Tmax will be used to calculate the Nesterov Index that will be used in the fire risk calculations  
 #' @param disturbanceON flag for activating disturbance modules. can be one of "wind", "fire",  "bb" or a combination of the three, ex. c("fire", "bb") 
 #' @param CO2model CO2 model for PRELES. Default CO2model = 1 (Launaniemi) ; CO2model = 2 (Kolari) 
-#' 
+#' @param lightnings used in fire disturbance module. is the frequency of lightning-caused ignition events (ha-1 d-1) used in the fire module it is a matrix of dimensions nSites,ndays 
+#' @param popden used in fire disturbance module. It is the population density (individuals km-2). it is a matrix of dimensions nSites,ndays 
+#' @param a_nd used in fire disturbance module. a(ND) is a parameter expressing the propensity of people to produce ignition events (ignitions individual-1 d-1). site specific parameter. vector of lenght nSites
+#' @param NIout flag to return the nesterov index
+#' @param FDIout flag to return the fire danger index instead of SW daily preles, set to 1 to return the FDI
+#'  
 #' @return Initialize PREBAS and return an object list that can be inputted to multiPrebas and regionPrebas functions to run PREBAS 
 #' @export
 #'
@@ -104,8 +109,8 @@ InitMultiSite <- function(nYearsMS,
                           tapioPars=pTapio,
                           thdPer = NA,
                           limPer = NA,
-                          ftTapioPar = ftTapio,
-                          tTapioPar = tTapio,
+                          ftTapioPar = NA,
+                          tTapioPar = NA,
                           GVrun = 1,
                           thinInt = -999.,
                           mortMod = 1, #flag for mortality model selection 1= reineke model; 2: random mort mod based on Siilipehto et al.2020; 3 = both models
@@ -125,8 +130,13 @@ InitMultiSite <- function(nYearsMS,
                           SMIt0 = NA,
                           TminTmax = NA,
                           disturbanceON = NA,
-                          CO2model = 2 #default from kaliokoski (2018)
-                          ){  
+                          CO2model = 2, #default from kaliokoski (2018)
+                          lightnings = NA,
+                          popden = NA,
+                          a_nd = NA,
+                          NIout = F, 
+                          FDIout = 0
+    ){  
   
   if(nrow(pCROBAS)!=53) stop("check that pCROBAS has 53 parameters, see pCROB to compare")
   if(!CO2model %in% 1:2) stop(paste0("set CO2model 1 or 2"))
@@ -135,6 +145,8 @@ InitMultiSite <- function(nYearsMS,
     pPRELES <- pPREL
     pPRELES[12:13] <- pCO2model[CO2model,]
   }
+  if(all(is.na(tTapioPar))) tTapioPar <- tTapio[,1:ncol(pCROBAS),,]
+  if(all(is.na(ftTapioPar))) ftTapioPar <- ftTapio[,1:ncol(pCROBAS),,]
   
   if(all(unique(disturbanceON) %in% c("fire","wind","bb",NA))){
     if(length(disturbanceON)==1){
@@ -172,9 +184,13 @@ InitMultiSite <- function(nYearsMS,
   if(all(is.na(limPer))) limPer <- rep(0.5,nSites)
   if(all(is.na(areas))) areas <- rep(1.,nSites) ###each site is 1 ha (used to scale regional harvest)
   if(all(is.na(siteInfo))){
-    siteInfo = matrix(c(1,1,3,160,0,0,20,3,3,413.,0.45,0.118),nSites,12,byrow = T) ###default values for nspecies and site type = 3
+    siteInfo = matrix(c(1,1,3,160,0,0,20,3,3,413.,0.45,0.118,3),nSites,13,byrow = T) ###default values for nspecies and site type = 3
     siteInfo[,1] <- 1:nSites
   }
+  ### automatically add tauDrainage if missing ###
+  if(dim(siteInfo)[2]==12) siteInfo <- cbind(siteInfo,pPRELES[4])
+  ### --- ###  
+  
   if(ingrowth){
     ingrowthStep <- 25
     # nTreeIngrowth <- 10
@@ -185,7 +201,8 @@ InitMultiSite <- function(nYearsMS,
   }
   colnames(siteInfo) <- c("siteID", "climID", "siteType", "SWinit", "CWinit", 
                           "SOGinit", "Sinit", "nLayers", "nSpecies", "soildepth", 
-                          "effective field capacity", "permanent wilting point") 
+                          "effective field capacity", "permanent wilting point",
+                          "tauDrenage") 
   
   nLayers <- siteInfo[,8]
   # nSp <- siteInfo[,9]
@@ -196,14 +213,6 @@ InitMultiSite <- function(nYearsMS,
   nVar <- length(varNam)
   
   nClimID <- length(unique(climIDs))
-  NI = matrix(0,nrow(PAR),ncol(PAR))
-  if(all(is.na(TminTmax))){
-    warning("Tmin and Tmax data were not provided. Nesterov index set to 0 in fire risk calculations")
-  }else{
-    for(i in 1:nClimID){
-      NI[i,] <- NesterovInd(rain = Precip[i,],tmin = TminTmax[i,,1],tmax = TminTmax[i,,2]) 
-    }
-  }
   if(!all((1:nClimID) %in% climIDs) | length(climIDs) != nSites) warning("check consistency between weather inputs and climIDs")
   if(nClimID == 1){
     nClimID = 2
@@ -218,6 +227,18 @@ InitMultiSite <- function(nYearsMS,
   
   maxYears <- max(nYearsMS)
   maxNlayers <- max(nLayers)
+  NI = matrix(0,nrow(PAR),ncol(PAR))
+  if(all(is.na(TminTmax))){
+    warning("Tmin and Tmax data were not provided. Nesterov index set to 0 in fire risk calculations")
+  }else{
+    for(i in 1:nClimID){
+      NI[i,] <- NesterovInd(rain = Precip[i,],tmin = TminTmax[i,,1],tmax = TminTmax[i,,2]) 
+    }
+  }
+  if(all(is.na(lightnings))) lightnings <- matrix(0,nSites,ncol(PAR))
+  if(all(is.na(popden))) popden <- matrix(0,nSites,ncol(PAR))
+  if(all(is.na(a_nd))) a_nd <- rep(0,nSites)
+  
   layerNam <- paste("layer",1:maxNlayers)
   multiOut <- array(0, dim=c(nSites,(maxYears),nVar,maxNlayers,2),
                     dimnames = list(site=NULL,year=NULL,variable=varNam,layer=layerNam,
@@ -328,11 +349,12 @@ InitMultiSite <- function(nYearsMS,
     thinX[,,11] <- 1
     thinX[,,1] <- matrix(yearIngrowth,nSites,length(yearIngrowth),byrow = T)
     thinX[,,2] <- matrix(siteInfo[,1],nSites,length(yearIngrowth))
-    thinX[,,3] <- matrix((maxNlayers-nIngrowthLayers+1):maxNlayers,nSites,length(yearIngrowth),byrow = T)
+    # thinX[,,3] <- matrix((maxNlayers-nIngrowthLayers+1):maxNlayers,nSites,length(yearIngrowth),byrow = T)
     thinX[,,4] <- initSeedling.def[1]
     thinX[,,5] <- initSeedling.def[2]
     thinX[,,7] <- initSeedling.def[4]
     thinX[,,6] <- -777#nTreeIngrowth*(pi*((initSeedling.def[2]/2/100)^2))
+    for(rrr in 1:nSites) thinX[rrr,,3] <- (nLayers[rrr] - length(yearIngrowth) + 1):nLayers[rrr]
     
     if(!all(is.na(multiThin))){
       multiThin <- abind(multiThin,thinX,along=2)
@@ -345,6 +367,10 @@ InitMultiSite <- function(nYearsMS,
     }
   }
   multiThin[is.na(multiThin)] <- -999
+  for(i in 1:nSites){
+    multiThin[i,,1][which(multiThin[i,,1]<1)] <- 999
+    multiThin[i,,] <- multiThin[i,order(multiThin[i,,1]),]
+  } 
   
   ###PROCESS weather inputs for prebas
   multiweather <- array(-999,dim=c(nClimID,maxYears,365,5))
@@ -573,9 +599,14 @@ if(alpharNcalc){
 } 
 
   dailyPRELES = array(-999,dim=c(nSites,(maxYears*365),3))#### build daily output array for PRELES
+  dailyPRELES[,,1] <- popden[,1:(maxYears*365)] ###fill preles daily output with population density that will be used internalkly in prebas for fire risk calculations
+  dailyPRELES[,,2] <- lightnings[,1:(maxYears*365)] ###fill preles daily output with lightnings that will be used internalkly in prebas for fire risk calculations
   dailyPRELES[,,3] <- NI[climIDs,1:(maxYears*365)] ###fill preles daily output with nestorov index that will be used internalkly in prebas for fire risk calculations
-  multiOut[,1,46,1,2] <- SMIt0 #initialize SMI first year 
 
+  multiOut[,1,46,1,2] <- SMIt0 #initialize SMI first year 
+  multiOut[,1,47,1,2] <- a_nd #initialize a_nd first year
+  
+  
   ###fix initialization year
   if(!all(fixAinit == 0)){
     if(length(fixAinit)!=nSites) stop("check fixAinit needs to be a vector of length nSites")
@@ -585,7 +616,7 @@ if(alpharNcalc){
     fixAinit[!siteX_ainit] <- 0
     multiOut[,1,7,1,2] <- fixAinit
   } 
-  
+  if(!NIout) NI = NULL
   multiSiteInit <- list(
     multiOut = multiOut,
     multiEnergyWood = multiEnergyWood,
@@ -646,8 +677,10 @@ if(alpharNcalc){
     latitude = latitude,
     TsumSBBs = TsumSBBs,
     dist_flag = dist_flag,
-    CO2model = CO2model
-  )
+    CO2model = CO2model,
+    NI = NI,
+    FDIout = FDIout
+   )
 
 
     return(multiSiteInit)
@@ -797,8 +830,9 @@ multiPrebas <- function(multiSiteInit,
                               dist_flag,
                               multiSiteInit$CO2model,
                               0,### fixAinit
-                              -777)) ###ingrowth flag
-  
+                              -777,###ingrowth flag
+                              multiSiteInit$FDIout ####output FDI instead of SW
+                    )) 
 
   ###modify alphar if fertilization is included
   if(!is.null(yearFert)){
@@ -843,7 +877,7 @@ multiPrebas <- function(multiSiteInit,
                      thinning=as.array(multiSiteInit$thinning),
                      pCROBAS = as.matrix(multiSiteInit$pCROBAS),    ####
                      allSp = as.integer(multiSiteInit$allSp),       ####
-                     siteInfo = as.matrix(multiSiteInit$siteInfo[,c(1:7,10:12)]),  ####
+                     siteInfo = as.matrix(multiSiteInit$siteInfo[,c(1:7,10:13)]),  ####
                      maxNlayers = as.integer(multiSiteInit$maxNlayers), ####
                      nThinning=as.integer(multiSiteInit$nThinning),
                      fAPAR=as.matrix(multiSiteInit$fAPAR),
@@ -898,11 +932,11 @@ multiPrebas <- function(multiSiteInit,
 
   dimnames(prebas$multiOut) <- dimnames(multiSiteInit$multiOut)
   dimnames(prebas$multiInitVar) <- dimnames(multiSiteInit$multiInitVar)
-  names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
+  # names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
   prebas$alpharNcalc = multiSiteInit$alpharNcalc
   dimnames(prebas$outDist) <- dimnames(outDist)
   dimnames(prebas$siteinfoDist) <- dimnames(multiSiteInit$siteInfoDist)
-  
+  if(!is.null(multiSiteInit$NI)) prebas$NI <- multiSiteInit$NI
   class(prebas) <- "multiPrebas"
   return(prebas)
 }
@@ -1028,7 +1062,9 @@ if(ageHarvPrior>0){
                               dist_flag,
                               multiSiteInit$CO2model,
                               0,### fixAinit
-                              -777)) ###ingrowth flag
+                              -777,###ingrowth flag
+                              multiSiteInit$FDIout ####output FDI instead of SW
+  ))
   
   ###modify alphar if fertilization is included
   if(!is.null(yearFert)){
@@ -1076,7 +1112,7 @@ prebas <- .Fortran("regionPrebas",
                      thinning=as.array(multiSiteInit$thinning),
                      pCROBAS = as.matrix(multiSiteInit$pCROBAS),    ####
                      allSp = as.integer(multiSiteInit$allSp),       ####
-                     siteInfo = as.matrix(multiSiteInit$siteInfo[,c(1:7,10:12)]),  ####
+                     siteInfo = as.matrix(multiSiteInit$siteInfo[,c(1:7,10:13)]),  ####
                      maxNlayers = as.integer(multiSiteInit$maxNlayers), ####
                      nThinning=as.integer(multiSiteInit$nThinning),
                      fAPAR=as.matrix(multiSiteInit$fAPAR),
@@ -1142,8 +1178,10 @@ prebas <- .Fortran("regionPrebas",
   
   dimnames(prebas$multiOut) <- dimnames(multiSiteInit$multiOut)
   dimnames(prebas$multiInitVar) <- dimnames(multiSiteInit$multiInitVar)
-  names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
+  # names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
   prebas$alpharNcalc = multiSiteInit$alpharNcalc
+  if(!is.null(multiSiteInit$NI)) prebas$NI <- multiSiteInit$NI
+  
   return(prebas)
 }
 
@@ -1231,7 +1269,9 @@ reStartRegionPrebas <- function(multiSiteInit,
                               dist_flag,
                               multiSiteInit$CO2model,
                               0,### fixAinit
-                              -777)) ###ingrowth flag
+                              -777,###ingrowth flag
+                              multiSiteInit$FDIout ####output FDI instead of SW
+  )) 
 
   # if(length(startSimYear)==1) startSimYear <- rep(startSimYear,multiSiteInit$nSites)
   if(length(HarvLim)==2) HarvLim <- matrix(HarvLim,multiSiteInit$maxYears,2,byrow = T)
@@ -1325,7 +1365,7 @@ reStartRegionPrebas <- function(multiSiteInit,
                      thinning=as.array(multiSiteInit$thinning),
                      pCROBAS = as.matrix(multiSiteInit$pCROBAS),    ####
                      allSp = as.integer(multiSiteInit$allSp),       ####
-                     siteInfo = as.matrix(multiSiteInit$siteInfo),  ####
+                     siteInfo = as.matrix(multiSiteInit$siteInfo[,c(1:7,10:13)]),  ####
                      maxNlayers = as.integer(multiSiteInit$maxNlayers), ####
                      nThinning=as.integer(multiSiteInit$nThinning),
                      fAPAR=as.matrix(multiSiteInit$fAPAR),
@@ -1393,7 +1433,7 @@ reStartRegionPrebas <- function(multiSiteInit,
   dimnames(prebas$multiInitVar) <- dimnames(multiSiteInit$multiInitVar)
   dimnames(prebas$siteInfoDist) <- dimnames(multiSiteInit$siteInfoDist)
   dimnames(prebas$outDist) <- dimnames(multiSiteInit$outDist)
-  names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
+  # names(prebas$siteInfo) <- names(multiSiteInit$siteInfo)
   
   return(prebas)
 }
